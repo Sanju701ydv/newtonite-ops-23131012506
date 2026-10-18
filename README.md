@@ -1,4 +1,4 @@
-# Operations Under Pressure — Newtonite Software Engineering Challenge
+# Operations Under Pressure 
 
 An internal web app to create, assign, track and resolve operational work items across teams. Team-scoped roles
 (viewer / member / lead / admin), a server-enforced workflow with a Lead-only approval gate, an append-only activity
