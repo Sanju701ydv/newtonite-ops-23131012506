@@ -1,0 +1,59 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ops Under Pressure</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--mut:#666;--bd:#ddd;--ac:#2563eb;--err:#b91c1c}
+@media(prefers-color-scheme:dark){:root{--bg:#161616;--fg:#eee;--mut:#999;--bd:#333;--ac:#60a5fa;--err:#f87171}}
+body{font:14px system-ui,sans-serif;background:var(--bg);color:var(--fg);margin:0;padding:16px;max-width:1000px;margin:auto}
+input,select,button,textarea{font:inherit;padding:6px 8px;border:1px solid var(--bd);background:var(--bg);color:var(--fg);border-radius:6px}
+button{cursor:pointer}button.p{background:var(--ac);color:#fff;border-color:var(--ac)}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;align-items:center}
+.item{border:1px solid var(--bd);border-radius:8px;padding:8px 10px;margin:6px 0;cursor:pointer}
+.mut{color:var(--mut);font-size:12px}.err{color:var(--err)}.tag{border:1px solid var(--bd);border-radius:10px;padding:0 7px;font-size:12px}
+.tab.on{background:var(--ac);color:#fff}
+</style></head><body>
+<div id="app"></div>
+<script>
+const $=s=>document.querySelector(s);let token=sessionStorage.token,me,state={view:'assigned',f:{},items:[],cursor:null,sel:null};
+async function api(path,opt={}){
+  const r=await fetch(path,{...opt,headers:{'Content-Type':'application/json',Authorization:'Bearer '+token,...(opt.headers||{})},body:opt.body&&JSON.stringify(opt.body)});
+  const j=await r.json().catch(()=>({}));if(!r.ok)throw Object.assign(new Error(j.error||r.statusText),{status:r.status,body:j});return j}
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function login(msg=''){ $('#app').innerHTML=`<h2>Operations Under Pressure</h2><div class=row><input id=e placeholder=email value="member1@ops.test"><input id=p type=password value="password123"><button class=p onclick="doLogin()">Login</button></div><div class=err>${esc(msg)}</div><p class=mut>Seed logins: admin@, lead.pay@, lead.sup@, lead.comp@, member1-4@, viewer@, outsider@ ops.test / password123</p>`}
+async function doLogin(){try{const r=await fetch('/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:$('#e').value,password:$('#p').value})});const j=await r.json();if(!r.ok)throw Error(j.error);token=sessionStorage.token=j.token;await init()}catch(e){login(e.message)}}
+async function init(){try{me=await api('/me')}catch{return login()}render();load(true)}
+function render(){
+  const tabs=[['assigned','Assigned to me'],['unassigned_urgent','Unassigned urgent'],['awaiting_approval','Awaiting my approval'],['','All items']];
+  $('#app').innerHTML=`<div class=row><b>${esc(me.name)}</b><span class=mut>${me.teams.map(t=>t.name+': '+t.role).join(' · ')}</span><button onclick="sessionStorage.clear();token=null;login()">Logout</button></div>
+  <div class=row>${tabs.map(([v,l])=>`<button class="tab ${state.view===v?'on':''}" onclick="state.view='${v}';load(true);render()">${l}</button>`).join('')}</div>
+  <div class=row><input id=q placeholder="Search" value="${esc(state.f.q||'')}"><select id=st><option value="">status</option>${['open','in_progress','awaiting_approval','resolved','closed'].map(s=>`<option ${state.f.status===s?'selected':''}>${s}</option>`)}</select>
+  <select id=pr><option value="">priority</option>${['low','medium','high','urgent'].map(s=>`<option ${state.f.priority===s?'selected':''}>${s}</option>`)}</select><button onclick="applyF()">Filter</button><button class=p onclick="newItem()">+ New item</button></div>
+  <div id=msg class=err></div><div id=list></div><div id=more></div><hr><div id=detail></div>`;drawList()}
+function applyF(){state.f={q:$('#q').value,status:$('#st').value,priority:$('#pr').value};load(true)}
+async function load(reset){
+  if(reset){state.items=[];state.cursor=null}
+  const p=new URLSearchParams({...(state.view?{view:state.view}:{}),...Object.fromEntries(Object.entries(state.f).filter(([,v])=>v)),...(state.cursor&&!reset?{cursor:state.cursor}:{})});
+  try{const r=await api('/items?'+p);state.items.push(...r.items);state.cursor=r.nextCursor;drawList()}catch(e){flash(e.message)}}
+const flash=m=>{const e=$('#msg');if(e)e.textContent=m};
+function drawList(){ if(!$('#list'))return;
+  $('#list').innerHTML=state.items.map(i=>`<div class=item onclick="open_(${i.id})"><b>#${i.id} ${esc(i.title)}</b> <span class=tag>${i.status}</span> <span class=tag>${i.priority}</span><div class=mut>${i.type} · team ${i.team_id} · ${i.assignee_id?'assignee '+i.assignee_id:'unassigned'} · v${i.version}</div></div>`).join('')||'<p class=mut>Nothing here.</p>';
+  $('#more').innerHTML=state.cursor?'<button onclick="load()">Load more</button>':''}
+async function open_(id){try{const [i,a]=await Promise.all([api('/items/'+id),api(`/items/${id}/activity`)]);state.sel=i;
+  const role=(me.teams.find(t=>t.id===i.team_id)||{}).role;
+  const next={open:['in_progress'],in_progress:['awaiting_approval','open'],awaiting_approval:['resolved','in_progress'],resolved:['closed','in_progress'],closed:[]}[i.status];
+  $('#detail').innerHTML=`<h3>#${i.id} ${esc(i.title)} <span class=tag>v${i.version}</span></h3><p>${esc(i.description)}</p><div class=mut>${i.status} · ${i.priority} · ${i.type} · due ${i.due_date?.slice(0,10)||'—'}</div>
+  <div class=row>${!i.assignee_id?`<button class=p onclick="act('claim')">Claim</button>`:''}
+  ${next.map(s=>`<button onclick="act('transition',{to:'${s}',version:${i.version}})">→ ${s}</button>`).join('')}
+  <select id=np>${['low','medium','high','urgent'].map(s=>`<option ${i.priority===s?'selected':''}>${s}</option>`)}</select><button onclick="setPrio()">Set priority</button></div>
+  <p class=mut>Your role on this team: ${role}. (UI shows all actions; the server enforces permissions.)</p>
+  <div class=row><input id=c placeholder="Add comment" style="flex:1"><button onclick="comment()">Comment</button></div>
+  <h4>Activity</h4>${a.map(e=>`<div class=mut>${new Date(e.created_at).toLocaleString()} — <b>${esc(e.actor)}</b> ${e.kind} ${esc(e.kind==='comment'?e.data.text:JSON.stringify(e.data))}</div>`).join('')}`}catch(e){flash(e.message)}}
+async function call(fn){ // shared error handling incl. 409 "reload" message
+  try{await fn();flash('')}catch(e){flash(e.status===409?'This item changed — reloaded the latest version, please retry.':e.message);}
+  if(state.sel)open_(state.sel.id);load(true)}
+const act=(p,b)=>call(()=>api(`/items/${state.sel.id}/${p}`,{method:'POST',body:b||{}}));
+const setPrio=()=>call(()=>api('/items/'+state.sel.id,{method:'PATCH',body:{version:state.sel.version,priority:$('#np').value}}));
+const comment=()=>call(async()=>{await api(`/items/${state.sel.id}/comments`,{method:'POST',body:{text:$('#c').value}})});
+async function newItem(){const title=prompt('Title');if(!title)return;const team=me.teams[0];
+  call(()=>api('/items',{method:'POST',headers:{'Idempotency-Key':crypto.randomUUID()},body:{title,type:'task',priority:'medium',team_id:team.id}}))}
+init();
+</script></body></html>
